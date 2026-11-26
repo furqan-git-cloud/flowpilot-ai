@@ -1,8 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { AuthPanel } from "./auth-panel";
+import { supabase } from "../lib/supabase";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8000" : "");
 
 const copy = {
   en: {
@@ -55,7 +58,7 @@ const copy = {
     aboutLanguagesTitle: "Choose your workspace language",
     aboutLanguagesText: "Use the interface in English, Urdu, or Arabic, with right-to-left layouts for Urdu and Arabic.",
     deploymentNoteTitle: "Before using real customer data",
-    aboutDataNote: "Current deployment note: this build stores data in a local SQLite database and has no sign-in or team access controls. Before using sensitive customer data, deploy with authentication, authorization, backups, and a production database.",
+    aboutDataNote: "Development uses local SQLite. The production deployment requires configured authentication, PostgreSQL, backups, and recovery before any sensitive customer data is entered.",
     addStep: "Add task step",
     removeStep: "Remove",
     stepTitle: "Task description",
@@ -124,7 +127,7 @@ const copy = {
     aboutLanguagesTitle: "اپنی ورک اسپیس کی زبان منتخب کریں",
     aboutLanguagesText: "انگریزی، اردو یا عربی میں کام کریں، اردو اور عربی کے لیے دائیں سے بائیں لے آؤٹ کے ساتھ۔",
     deploymentNoteTitle: "حقیقی صارفین کا ڈیٹا استعمال کرنے سے پہلے",
-    aboutDataNote: "موجودہ تعیناتی کی وضاحت: یہ ورژن ڈیٹا مقامی SQLite ڈیٹابیس میں رکھتا ہے اور اس میں سائن اِن یا ٹیم کی رسائی کا کنٹرول نہیں ہے۔ حساس صارفین کا ڈیٹا استعمال کرنے سے پہلے توثیق، اجازتوں، بیک اپ اور پروڈکشن ڈیٹابیس کے ساتھ تعینات کریں۔",
+    aboutDataNote: "مقامی ترقی میں SQLite استعمال ہوتا ہے۔ حساس صارفین کا ڈیٹا شامل کرنے سے پہلے پروڈکشن تعیناتی میں توثیق، PostgreSQL، بیک اپ اور ڈیٹا بحالی کی تصدیق ضروری ہے۔",
     addStep: "کام کا مرحلہ شامل کریں",
     removeStep: "ہٹائیں",
     stepTitle: "کام کی تفصیل",
@@ -193,7 +196,7 @@ const copy = {
     aboutLanguagesTitle: "اختر لغة مساحة العمل",
     aboutLanguagesText: "استخدم الواجهة بالإنجليزية أو الأردية أو العربية، مع تخطيط من اليمين إلى اليسار للأردية والعربية.",
     deploymentNoteTitle: "قبل استخدام بيانات العملاء الحقيقية",
-    aboutDataNote: "ملاحظة حول النشر الحالي: يخزن هذا الإصدار البيانات في قاعدة SQLite محلية ولا يتضمن تسجيل دخول أو ضوابط وصول للفريق. قبل استخدام بيانات عملاء حساسة، انشره مع المصادقة والتفويض والنسخ الاحتياطية وقاعدة بيانات إنتاجية.",
+    aboutDataNote: "تستخدم بيئة التطوير قاعدة SQLite محلية. يتطلب نشر الإنتاج إعداد المصادقة وPostgreSQL والنسخ الاحتياطية واستعادة البيانات قبل إدخال أي بيانات حساسة للعملاء.",
     addStep: "إضافة خطوة مهمة",
     removeStep: "إزالة",
     stepTitle: "وصف المهمة",
@@ -225,7 +228,14 @@ type WorkflowRun = { id: string; status: string; output: string; created_at: str
 type Stats = { projects: number; tasks: number; workflows: number; completed_tasks: number };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, init);
+  if (!API) throw new Error("The API URL is not configured.");
+  if (!supabase) throw new Error("Supabase authentication is not configured.");
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  if (!data.session) throw new Error("Sign in to continue.");
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${data.session.access_token}`);
+  const response = await fetch(`${API}${path}`, { ...init, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${response.status})`;
@@ -247,6 +257,9 @@ function normalizeWorkflowStep(step: Partial<WorkflowStep>): WorkflowStep {
 }
 
 export default function Home() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authReady, setAuthReady] = useState(!supabase);
+  const currentUserId = useRef<string | null>(null);
   const [locale, setLocale] = useState<Locale>("en");
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -276,16 +289,48 @@ export default function Home() {
   }, [locale, t.dir]);
 
   useEffect(() => {
+    if (!supabase) return;
+    let active = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) setMessage(`Could not restore sign-in: ${error.message}`);
+      currentUserId.current = data.session?.user.id ?? null;
+      setSession(data.session);
+      setAuthReady(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      const nextUserId = nextSession?.user.id ?? null;
+      if (currentUserId.current !== nextUserId) {
+        setWorkspaces([]);
+        setWorkspace(null);
+        setProjects([]);
+        setTasks([]);
+        setWorkflows([]);
+        setWorkflowRuns([]);
+        setStats({ projects: 0, tasks: 0, workflows: 0, completed_tasks: 0 });
+        currentUserId.current = nextUserId;
+      }
+      setSession(nextSession);
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const userId = session?.user.id;
+  useEffect(() => {
+    if (!userId) return;
     request<Workspace[]>("/api/v1/workspaces")
       .then((items) => {
         setWorkspaces(items);
-        if (items.length > 0) setWorkspace((current) => current ?? items[0]);
+        if (items.length > 0) setWorkspace(items[0]);
       })
       .catch((error: Error) => setMessage(`Could not load workspaces: ${error.message}`));
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    if (!workspace) return;
+    if (!userId || !workspace) return;
     let active = true;
     Promise.all([
       request<Project[]>(`/api/v1/projects?workspace_id=${encodeURIComponent(workspace.id)}`),
@@ -304,7 +349,13 @@ export default function Home() {
         if (active) setMessage(`Could not load workspace data: ${error.message}`);
       });
     return () => { active = false; };
-  }, [workspace]);
+  }, [userId, workspace]);
+
+  async function signOut() {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signOut();
+    if (error) setMessage(`Could not sign out: ${error.message}`);
+  }
 
   async function createWorkspace() {
     const name = workspaceName.trim();
@@ -513,6 +564,28 @@ export default function Home() {
     }
   }
 
+  if (!supabase || !API) {
+    const missing = [
+      ...(!supabase ? ["NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"] : []),
+      ...(!API ? ["NEXT_PUBLIC_API_URL"] : []),
+    ];
+    return (
+      <main className="auth-page">
+        <section className="auth-card" aria-labelledby="configuration-title">
+          <div className="brand auth-brand"><span className="brand-mark">F</span>FlowPilot AI</div>
+          <p className="eyebrow">Deployment configuration required</p>
+          <h1 id="configuration-title">FlowPilot is not configured</h1>
+          <p className="auth-description">Set the required public environment variables in the deployment settings, then redeploy.</p>
+          <ul className="configuration-list">{missing.map((name) => <li key={name}><code>{name}</code></li>)}</ul>
+        </section>
+      </main>
+    );
+  }
+  if (!authReady) {
+    return <main className="auth-page"><section className="auth-card" aria-live="polite">Checking your sign-in…</section></main>;
+  }
+  if (!session) return <AuthPanel client={supabase} />;
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -549,6 +622,7 @@ export default function Home() {
         <header className="topbar">
           <div className="hero-copy"><p className="eyebrow">{t.overview}</p><h1>{t.welcome}</h1><p className="hero-subtitle">{t.subtitle}</p></div>
           <div className="header-actions">
+            <div className="account-actions"><span>{session.user.email}</span><button className="auth-signout" onClick={signOut}>Sign out</button></div>
             <div className="workspace-status"><span className="status-dot" /><div><small>{t.localActivity}</small><strong>{workspace ? t.liveStatus : t.noWorkspace}</strong></div></div>
             <div className="workspace-create">
               <input aria-label={t.workspaceName} value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder={t.workspaceName} maxLength={100} />

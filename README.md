@@ -6,6 +6,10 @@ A multilingual business operations and workflow SaaS starter.
 
 ## Run locally
 
+Copy `frontend/.env.local.example` to `frontend/.env.local` and configure a
+Supabase project plus the local API URL before signing in. The backend uses a
+separate local-only SQLite database by default.
+
 ### Backend
 
 ```bash
@@ -38,7 +42,12 @@ Workflow actions currently create tasks inside FlowPilot. They do not send email
 
 ## Security and production readiness
 
-The local setup uses SQLite and does not provide sign-in or team-level access control. Do not expose this deployment to the public internet or use sensitive customer data until production authentication, authorization, backups, and a production database are configured. See [docs/SECURITY.md](docs/SECURITY.md) for the security milestones.
+The API verifies Supabase access tokens and scopes workspaces to the signed-in
+owner. Local development uses SQLite; production requires PostgreSQL. A
+production deployment still requires provider configuration and verification
+of account isolation, backups, and recovery before using sensitive customer
+data. See [docs/VERCEL_DEPLOYMENT.md](docs/VERCEL_DEPLOYMENT.md) for deployment
+steps and [docs/SECURITY.md](docs/SECURITY.md) for remaining milestones.
 
 ## Validation
 

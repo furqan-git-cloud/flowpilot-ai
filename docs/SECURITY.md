@@ -1,13 +1,17 @@
-# Security Milestones
+# Security status and remaining milestones
 
-This MVP is a local development implementation, not production-ready multi-user SaaS.
-It currently has no authentication or workspace membership checks. Do not expose its API to the public internet or enter real customer information.
+The API now verifies Supabase access tokens and applies owner checks to every
+workspace, project, task, workflow, workflow run, and analytics request.
+PostgreSQL schema initialization also enables owner-scoped row-level policies.
+Local development uses SQLite and is not a production deployment.
 
-Before public launch:
+Before entering sensitive customer data:
 
-1. Configure Supabase Auth and verify JWT signatures and claims on every private route.
-2. Derive the current user from verified tokens, never from a browser-supplied user ID.
-3. Enforce workspace membership and role checks in the backend.
-4. Enable PostgreSQL RLS and test isolation with two independent accounts.
-5. Rotate secrets, configure HTTPS/CORS, backups and monitoring.
-6. Add rate limiting and audit logs.
+1. Configure the production Supabase and Vercel environment using
+   [the deployment guide](VERCEL_DEPLOYMENT.md); keep database credentials and
+   signing secrets server-side.
+2. Verify account isolation with two independent accounts and confirm invalid
+   and expired tokens are rejected in the deployed environment.
+3. Configure and test automated PostgreSQL backups and a recovery procedure.
+4. Configure monitoring, alerting, and rate limiting for the public API.
+5. Review audit logging and applicable data-retention requirements.
